@@ -45,9 +45,10 @@ document.getElementById("fs").onclick = () => {
 };
 document.addEventListener("fullscreenchange", () => { document.getElementById("fs").hidden = !!document.fullscreenElement; });
 
-function qrBlock(candidates, heading) {
+function qrBlock(candidates, heading, seats) {
   const list = candidates.length ? `<ul class="cands">${candidates.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : "";
-  return `<p class="headline">${heading}</p>
+  const how = seats > 1 ? `<p class="sub" style="margin-bottom:3vh">Vote for up to ${seats} candidates</p>` : "";
+  return `<p class="headline">${heading}</p>${how}
     <div class="split"><div><div id="qrSlot"></div><p class="url">${esc(voteUrl)}</p></div>${list}</div>`;
 }
 
@@ -58,16 +59,18 @@ onSnapshot(doc(db, "poll", "state"), snap => {
   const pos = s.title ? `<p class="position">${esc(s.title)}</p>` : "";
 
   if (s.stage === "setup") {
-    screen.innerHTML = pos + qrBlock(s.candidates, "Voting opens soon");
+    screen.innerHTML = pos + qrBlock(s.candidates, "Voting opens soon", s.seats || 1);
   } else if (s.stage === "open") {
-    screen.innerHTML = pos + qrBlock(s.candidates, "Voting is open");
+    screen.innerHTML = pos + qrBlock(s.candidates, "Voting is open", s.seats || 1);
   } else if (s.stage === "closed") {
     screen.innerHTML = pos + `<p class="headline">Voting has closed</p><p class="sub">The result will be announced shortly.</p>`;
   } else if (s.stage === "revealed") {
-    const w = s.winner || [];
-    screen.innerHTML = pos + (w.length > 1
-      ? `<p class="sub">It’s a tie between</p><p class="winner">${w.map(esc).join(" &amp; ")}</p>`
-      : `<p class="sub">Elected</p><p class="winner">${esc(w[0] || "No votes cast")}</p>`);
+    const w = s.winner || [], seats = s.seats || 1;
+    const size = w.length > 1 ? "font-size:9vh" : "";
+    const names = w.length ? w.map(n => `<p class="winner" style="${size}">${esc(n)}</p>`).join("") : `<p class="winner">No votes cast</p>`;
+    screen.innerHTML = pos + (w.length > seats
+      ? `<p class="sub">It’s a tie between</p>${names}`
+      : `<p class="sub">Elected</p>${names}`);
   }
   const slot = document.getElementById("qrSlot");
   if (slot) slot.appendChild(qrEl);
