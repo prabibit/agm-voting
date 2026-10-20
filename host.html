@@ -86,7 +86,7 @@ let state = null, votes = [], proxies = [], unsubs = [], watchedRound = null, st
 $("loginBtn").onclick = async () => {
   say("loginMsg", "Signing in…");
   try { await signInWithEmailAndPassword(auth, $("email").value.trim(), $("password").value); say("loginMsg", ""); }
-     catch (e) { say("loginMsg", "Sign-in failed: " + e.code, "bad"); }
+  catch (e) { say("loginMsg", "Sign-in failed: " + e.code, "bad"); }
 };
 $("password").addEventListener("keydown", e => { if (e.key === "Enter") $("loginBtn").click(); });
 $("logoutBtn").onclick = () => signOut(auth);
@@ -216,13 +216,14 @@ function render() {
   }
 
   const t = tally();
-  let rows = "", sumI = 0, sumP = 0;
+  let rows = "", sum = 0;
   for (const [name, v] of Object.entries(t)) {
-    sumI += v.inPerson; sumP += v.proxy;
-    rows += `<tr><td>${esc(name)}</td><td class="num">${v.inPerson}</td><td class="num">${v.proxy}</td><td class="num"><strong>${v.inPerson + v.proxy}</strong></td></tr>`;
+    const total = v.inPerson + v.proxy;
+    sum += total;
+    rows += `<tr><td>${esc(name)}</td><td class="num"><strong>${total}</strong></td></tr>`;
   }
-  $("tally").innerHTML = `<table><tr><th>Candidate</th><th class="num">In person</th><th class="num">Proxy</th><th class="num">Total</th></tr>${rows}
-    <tr><td><strong>All</strong></td><td class="num">${sumI}</td><td class="num">${sumP}</td><td class="num"><strong>${sumI + sumP}</strong></td></tr></table>`;
+  $("tally").innerHTML = `<table><tr><th>Candidate</th><th class="num">Votes</th></tr>${rows}
+    <tr><td><strong>All</strong></td><td class="num"><strong>${sum}</strong></td></tr></table>`;
 }
 const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 </script>
