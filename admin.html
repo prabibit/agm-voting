@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Proxy votes</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>Proxy votes</h1>
+
+  <section id="login" class="panel" hidden>
+    <p>Sign in with the admin account.</p>
+    <input id="email" type="email" placeholder="Admin email" autocomplete="username">
+    <input id="password" type="password" placeholder="Password" autocomplete="current-password">
+    <button id="loginBtn" class="wide">Sign in</button>
+    <p id="loginMsg" class="msg"></p>
+  </section>
+
+  <section id="app" hidden>
+    <p id="info"></p>
+    <div id="buttons"></div>
+    <p id="msg" class="msg"></p>
+    <h2>Added from this device</h2>
+    <ul class="plain" id="log"><li class="muted">Nothing yet.</li></ul>
+    <p><button id="logoutBtn" class="secondary">Sign out</button></p>
+  </section>
+</main>
+
+<script type="module">
+import { db, auth } from "./firebase-config.js";
+import { doc, onSnapshot, addDoc, deleteDoc, collection, serverTimestamp }
+  from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { signInWithEmailAndPassword, signOut, onAuthStateChanged }
+  from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+const $ = id => document.getElementById(id);
+const say = (text, kind = "") => { $("msg").textContent = text; $("msg").className = "msg " + kind; };
+let state = null, log = [], unsub = null;
+
+$("loginBtn").onclick = async () => {
+  try { await signInWithEmailAndPassword(auth, $("email").value.trim(), $("password").value); }
+  catch (e) { $("loginMsg").textContent = "Email or password is wrong."; $("loginMsg").className = "msg bad"; }
+};
+$("password").addEventListener("keydown", e => { if (e.key === "Enter") $("loginBtn").click(); });
+$("logoutBtn").onclick = () => signOut(auth);
+
+onAuthStateChanged(auth, user => {
+  $("login").hidden = !!user;
+  $("app").hidden = !user;
+  if (unsub) { unsub(); unsub = null; }
+  if (user) unsub = onSnapshot(doc(db, "poll", "state"), s => { state = s.data(); render(); });
+});
+
+async function add(name) {
+  say("Adding…");
+  try {
+    const ref = await addDoc(collection(db, "proxyVotes"),
+      { round: state.round, candidate: name, at: serverTimestamp() });
+    log.unshift({ id: ref.id, name, round: state.round, title: state.title, undone: false });
+    say(`Added 1 proxy vote for ${name}.`, "ok");
+  } catch (e) {
+    say(state.stage === "open" ? "That vote wasn’t added. Check the connection and that you’re signed in as admin." :
+                                 "Voting is closed, so proxy votes can’t be added.", "bad");
+  }
+  render();
+}
+
+async function undo(entry) {
+  try { await deleteDoc(doc(db, "proxyVotes", entry.id)); entry.undone = true; say(`Removed 1 proxy vote for ${entry.name}.`, "ok"); }
+  catch (e) { say("That vote can’t be removed now. Votes can only be removed while voting is open.", "bad"); }
+  render();
+}
+
+function render() {
+  if (!state) { $("info").textContent = "Waiting for the host to set up the vote."; return; }
+  const open = state.stage === "open";
+  $("info").innerHTML = `${state.title ? `<strong>${esc(state.title)}</strong>. ` : ""}` +
+    (open ? "Voting is open. Each press adds one proxy vote." : "Voting isn’t open. Proxy votes can only be added while voting is open.");
+
+  $("buttons").innerHTML = "";
+  if (open) for (const name of state.candidates) {
+    const n = log.filter(l => !l.undone && l.round === state.round && l.name === name).length;
+    const b = document.createElement("button");
+    b.className = "choice";
+    b.textContent = `+1 for ${name}` + (n ? ` (${n} added)` : "");
+    b.onclick = () => add(name);
+    $("buttons").appendChild(b);
+  }
+
+  $("log").innerHTML = log.length ? "" : `<li class="muted">Nothing yet.</li>`;
+  for (const entry of log) {
+    const li = document.createElement("li");
+    li.textContent = `${entry.undone ? "Removed" : "+1"}: ${entry.name}${entry.title ? " (" + entry.title + ")" : ""}`;
+    if (!entry.undone && open && entry.round === state.round) {
+      const b = document.createElement("button");
+      b.className = "secondary"; b.textContent = "Undo";
+      b.onclick = () => undo(entry);
+      li.appendChild(b);
+    }
+    $("log").appendChild(li);
+  }
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+</script>
+</body>
+</html>

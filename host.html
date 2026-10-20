@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AGM host controls</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>Host controls</h1>
+
+  <section id="login" class="panel" hidden>
+    <p>Sign in with the host account.</p>
+    <input id="email" type="email" placeholder="Host email" autocomplete="username">
+    <input id="password" type="password" placeholder="Password" autocomplete="current-password">
+    <button id="loginBtn" class="wide">Sign in</button>
+    <p id="loginMsg" class="msg"></p>
+  </section>
+
+  <section id="app" hidden>
+    <div class="panel">
+      <p>Stage: <span class="stage" id="stage"></span> &nbsp; Position <span id="roundNo"></span></p>
+      <p>In-person ballots received: <strong id="inPersonCount">0</strong></p>
+      <div class="row">
+        <button id="openBtn">Open voting</button>
+        <button id="closeBtn" class="secondary">Close voting</button>
+        <button id="revealBtn">Next: announce winner</button>
+        <button id="nextPosBtn" class="secondary">Start next position</button>
+      </div>
+      <p id="stageMsg" class="msg"></p>
+      <button id="displayBtn" class="secondary">Open big-screen window</button>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Position</h2>
+      <div class="row">
+        <input id="titleInput" placeholder="e.g. President">
+        <button id="titleBtn" class="secondary">Save</button>
+      </div>
+
+      <h2>Candidates</h2>
+      <div class="row">
+        <input id="candInput" placeholder="Candidate name">
+        <button id="candBtn">Add</button>
+      </div>
+      <ul class="plain" id="candList"></ul>
+      <p class="muted" id="candNote"></p>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Tally (private)</h2>
+      <p class="muted">Hidden by default so it never shows up if this screen is mirrored to the projector.</p>
+      <button id="tallyBtn" class="secondary">Show tally</button>
+      <div id="tally" hidden></div>
+    </div>
+
+    <details class="panel">
+      <summary><strong>One-time setup: load voting codes</strong></summary>
+      <p class="muted">Choose the codes.txt file. Keep that file off GitHub.</p>
+      <input id="codesFile" type="file" accept=".txt">
+      <button id="codesBtn">Load codes</button>
+      <p id="codesMsg" class="msg"></p>
+    </details>
+
+    <button id="logoutBtn" class="secondary">Sign out</button>
+  </section>
+</main>
+
+<script type="module">
+import { db, auth } from "./firebase-config.js";
+import { doc, getDoc, setDoc, updateDoc, onSnapshot, collection, query, where,
+         writeBatch, arrayUnion, arrayRemove, getCountFromServer }
+  from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { signInWithEmailAndPassword, signOut, onAuthStateChanged }
+  from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+const $ = id => document.getElementById(id);
+const stateRef = doc(db, "poll", "state");
+const say = (id, text, kind = "") => { $(id).textContent = text; $(id).className = "msg " + kind; };
+const STAGE_NAMES = { setup: "Setting up", open: "Voting open", closed: "Voting closed", revealed: "Winner announced" };
+
+let state = null, votes = [], proxies = [], unsubs = [], watchedRound = null, stateUnsub = null;
+
+// ---------- Sign in ----------
+$("loginBtn").onclick = async () => {
+  say("loginMsg", "Signing in…");
+  try { await signInWithEmailAndPassword(auth, $("email").value.trim(), $("password").value); say("loginMsg", ""); }
+  catch (e) { say("loginMsg", "Email or password is wrong.", "bad"); }
+};
+$("password").addEventListener("keydown", e => { if (e.key === "Enter") $("loginBtn").click(); });
+$("logoutBtn").onclick = () => signOut(auth);
+
+onAuthStateChanged(auth, async user => {
+  $("login").hidden = !!user;
+  $("app").hidden = !user;
+  if (stateUnsub) { stateUnsub(); stateUnsub = null; }
+  if (!user) return;
+  try {
+    const snap = await getDoc(stateRef);
+    if (!snap.exists()) {
+      await setDoc(stateRef, { title: "", candidates: [], stage: "setup", round: 1, winner: [] });
+    }
+  } catch (e) { say("stageMsg", "This account can’t control the vote. Check the host UID in the Firebase rules.", "bad"); }
+  stateUnsub = onSnapshot(stateRef, snap => { state = snap.data(); watchRound(); render(); });
+});
+
+// ---------- Live tally for the current position ----------
+function watchRound() {
+  if (!state || state.round === watchedRound) return;
+  unsubs.forEach(u => u()); unsubs = [];
+  watchedRound = state.round; votes = []; proxies = [];
+  unsubs.push(onSnapshot(query(collection(db, "votes"), where("round", "==", state.round)),
+    s => { votes = s.docs.map(d => d.data()); render(); }));
+  unsubs.push(onSnapshot(query(collection(db, "proxyVotes"), where("round", "==", state.round)),
+    s => { proxies = s.docs.map(d => d.data()); render(); }));
+}
+
+function tally() {
+  const t = {};
+  for (const c of state.candidates) t[c] = { inPerson: 0, proxy: 0 };
+  for (const v of votes)   if (t[v.candidate]) t[v.candidate].inPerson++;
+  for (const p of proxies) if (t[p.candidate]) t[p.candidate].proxy++;
+  return t;
+}
+
+// ---------- Buttons ----------
+async function run(fn) {
+  try { await fn(); say("stageMsg", ""); }
+  catch (e) { say("stageMsg", "That didn’t save. Check the internet connection and try again.", "bad"); }
+}
+
+$("titleBtn").onclick = () => run(() => updateDoc(stateRef, { title: $("titleInput").value.trim() }));
+
+$("candBtn").onclick = () => {
+  const name = $("candInput").value.trim();
+  if (!name) return;
+  $("candInput").value = "";
+  run(() => updateDoc(stateRef, { candidates: arrayUnion(name) }));
+};
+$("candInput").addEventListener("keydown", e => { if (e.key === "Enter") $("candBtn").click(); });
+
+$("openBtn").onclick = () => {
+  if (state.candidates.length < 1) return say("stageMsg", "Add at least one candidate before opening voting.", "bad");
+  run(() => updateDoc(stateRef, { stage: "open" }));
+};
+$("closeBtn").onclick = () => {
+  if (confirm("Close voting? Phones will stop accepting votes.")) run(() => updateDoc(stateRef, { stage: "closed" }));
+};
+$("revealBtn").onclick = () => {
+  const t = tally();
+  const totals = Object.entries(t).map(([name, v]) => [name, v.inPerson + v.proxy]);
+  const top = Math.max(0, ...totals.map(x => x[1]));
+  if (top === 0 && !confirm("No votes have been cast. Announce anyway?")) return;
+  const winner = totals.filter(x => x[1] === top).map(x => x[0]);
+  run(() => updateDoc(stateRef, { stage: "revealed", winner }));
+};
+$("nextPosBtn").onclick = () => {
+  if (!confirm("Start the next position? This clears the candidate list. Codes can be used again for the new position.")) return;
+  $("titleInput").value = "";
+  run(() => updateDoc(stateRef, { stage: "setup", round: state.round + 1, title: "", candidates: [], winner: [] }));
+};
+$("displayBtn").onclick = () => window.open("display.html", "agmDisplay", "width=1280,height=720");
+$("tallyBtn").onclick = () => {
+  $("tally").hidden = !$("tally").hidden;
+  $("tallyBtn").textContent = $("tally").hidden ? "Show tally" : "Hide tally";
+};
+
+// ---------- Load codes ----------
+$("codesBtn").onclick = async () => {
+  const file = $("codesFile").files[0];
+  if (!file) return say("codesMsg", "Choose the codes.txt file first.", "bad");
+  const codes = [...new Set((await file.text()).split(/\s+/).map(s => s.toUpperCase().replace(/[^A-Z0-9]/g, "")).filter(s => s.length === 4))];
+  if (!codes.length) return say("codesMsg", "No codes found in that file.", "bad");
+  say("codesMsg", `Loading ${codes.length} codes…`);
+  try {
+    for (let i = 0; i < codes.length; i += 400) {
+      const batch = writeBatch(db);
+      codes.slice(i, i + 400).forEach(c => batch.set(doc(db, "codes", c), { ok: true }));
+      await batch.commit();
+    }
+    const n = (await getCountFromServer(collection(db, "codes"))).data().count;
+    say("codesMsg", `Done. ${n} codes are now active.`, "ok");
+  } catch (e) { say("codesMsg", "Loading failed. Check you’re signed in as the host.", "bad"); }
+};
+
+// ---------- Render ----------
+function render() {
+  if (!state) return;
+  const s = state.stage;
+  $("stage").textContent = STAGE_NAMES[s] || s;
+  $("roundNo").textContent = state.round;
+  $("inPersonCount").textContent = votes.length;
+  if (document.activeElement !== $("titleInput")) $("titleInput").value = state.title || "";
+
+  $("openBtn").disabled    = !(s === "setup" || s === "closed");
+  $("openBtn").textContent = s === "closed" ? "Reopen voting" : "Open voting";
+  $("closeBtn").disabled   = s !== "open";
+  $("revealBtn").disabled  = s !== "closed";
+  $("nextPosBtn").disabled = s !== "revealed";
+
+  const editable = s === "setup";
+  $("candInput").disabled = $("candBtn").disabled = !editable;
+  $("candNote").textContent = editable ? "" : "Candidates can only be changed before voting opens.";
+  $("candList").innerHTML = "";
+  for (const name of state.candidates) {
+    const li = document.createElement("li");
+    li.textContent = name;
+    if (editable) {
+      const b = document.createElement("button");
+      b.className = "danger"; b.textContent = "Remove";
+      b.onclick = () => run(() => updateDoc(stateRef, { candidates: arrayRemove(name) }));
+      li.appendChild(b);
+    }
+    $("candList").appendChild(li);
+  }
+
+  const t = tally();
+  let rows = "", sumI = 0, sumP = 0;
+  for (const [name, v] of Object.entries(t)) {
+    sumI += v.inPerson; sumP += v.proxy;
+    rows += `<tr><td>${esc(name)}</td><td class="num">${v.inPerson}</td><td class="num">${v.proxy}</td><td class="num"><strong>${v.inPerson + v.proxy}</strong></td></tr>`;
+  }
+  $("tally").innerHTML = `<table><tr><th>Candidate</th><th class="num">In person</th><th class="num">Proxy</th><th class="num">Total</th></tr>${rows}
+    <tr><td><strong>All</strong></td><td class="num">${sumI}</td><td class="num">${sumP}</td><td class="num"><strong>${sumI + sumP}</strong></td></tr></table>`;
+}
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+</script>
+</body>
+</html>

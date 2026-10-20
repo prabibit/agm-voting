@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AGM vote</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1 id="title">AGM vote</h1>
+
+  <section id="codeStep">
+    <p>Enter the code you were given at the entrance.</p>
+    <input id="codeInput" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="K7PX" maxlength="4">
+    <button id="codeBtn" class="wide">Continue</button>
+    <p id="codeMsg" class="msg"></p>
+  </section>
+
+  <section id="ballotStep" hidden>
+    <p class="muted">Your code: <strong id="codeShow"></strong> (<a href="#" id="changeCode">use a different code</a>)</p>
+    <div id="status"></div>
+    <div id="choices"></div>
+    <button id="voteBtn" class="wide" hidden disabled>Choose a candidate</button>
+    <p id="voteMsg" class="msg"></p>
+  </section>
+</main>
+
+<script type="module">
+import { db } from "./firebase-config.js";
+import { doc, getDoc, setDoc, onSnapshot, serverTimestamp }
+  from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const $ = id => document.getElementById(id);
+let code = null, state = null, selected = null, voted = new Set(), sending = false;
+
+const clean  = s => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
+const pretty = c => c;
+const say = (id, text, kind = "") => { $(id).textContent = text; $(id).className = "msg " + kind; };
+
+// Remember the code on this phone so people don't retype it for each position.
+function save() {
+  try { localStorage.setItem("agm", JSON.stringify({ code, voted: [...voted] })); } catch (e) {}
+}
+try {
+  const saved = JSON.parse(localStorage.getItem("agm") || "null");
+  if (saved && saved.code) { code = saved.code; voted = new Set(saved.voted || []); }
+} catch (e) {}
+
+$("codeBtn").onclick = async () => {
+  const c = clean($("codeInput").value);
+  if (c.length !== 4) return say("codeMsg", "Codes have 4 letters and numbers, like K7PX.", "bad");
+  $("codeBtn").disabled = true;
+  say("codeMsg", "Checking your code…");
+  try {
+    const snap = await getDoc(doc(db, "codes", c));
+    if (!snap.exists()) { say("codeMsg", "That code isn’t valid. Check it and try again.", "bad"); return; }
+    if (c !== code) voted = new Set();
+    code = c; save(); say("codeMsg", ""); render();
+  } catch (e) {
+    say("codeMsg", "Couldn’t check your code. Check your internet connection and try again.", "bad");
+  } finally { $("codeBtn").disabled = false; }
+};
+$("codeInput").addEventListener("keydown", e => { if (e.key === "Enter") $("codeBtn").click(); });
+
+$("changeCode").onclick = e => {
+  e.preventDefault();
+  code = null; voted = new Set(); save();
+  $("codeInput").value = ""; render();
+};
+
+$("voteBtn").onclick = async () => {
+  if (!selected || sending) return;
+  sending = true; $("voteBtn").disabled = true;
+  say("voteMsg", "Sending your vote…");
+  const round = state.round;
+  try {
+    await setDoc(doc(db, "votes", `${round}_${code}`),
+      { code, round, candidate: selected, at: serverTimestamp() });
+    voted.add(round); save(); selected = null; say("voteMsg", "");
+  } catch (e) {
+    if (state.stage !== "open") say("voteMsg", "Voting closed before your vote was received.", "bad");
+    else if (e.code === "permission-denied") say("voteMsg", "This code has already been used for this vote.", "bad");
+    else say("voteMsg", "Your vote wasn’t sent. Check your internet connection and try again.", "bad");
+  } finally { sending = false; render(); }
+};
+
+function render() {
+  $("codeStep").hidden = !!code;
+  $("ballotStep").hidden = !code;
+  if (!code) return;
+  $("codeShow").textContent = pretty(code);
+  $("choices").innerHTML = "";
+  $("voteBtn").hidden = true;
+
+  if (!state) { $("status").innerHTML = "<p>Loading…</p>"; return; }
+  $("title").textContent = state.title || "AGM vote";
+
+  if (voted.has(state.round)) {
+    $("status").innerHTML = `<p class="msg ok">Your vote has been recorded.</p><p class="muted">Keep this page open. The next vote will appear here automatically.</p>`;
+    return;
+  }
+  if (state.stage === "setup")    { $("status").innerHTML = "<p>Voting hasn’t opened yet. This page will update automatically.</p>"; return; }
+  if (state.stage === "closed")   { $("status").innerHTML = "<p>Voting has closed. Watch the screen for the result.</p>"; return; }
+  if (state.stage === "revealed") { $("status").innerHTML = "<p>The result is on the screen. Keep this page open for the next vote.</p>"; return; }
+
+  // Voting open
+  $("status").innerHTML = "<p>Choose one candidate, then submit your vote.</p>";
+  if (!state.candidates.includes(selected)) selected = null;
+  for (const name of state.candidates) {
+    const b = document.createElement("button");
+    b.className = "choice";
+    b.textContent = name;
+    b.setAttribute("aria-pressed", String(name === selected));
+    b.onclick = () => { selected = name; render(); };
+    $("choices").appendChild(b);
+  }
+  $("voteBtn").hidden = false;
+  $("voteBtn").disabled = !selected || sending;
+  $("voteBtn").textContent = selected ? `Submit vote for ${selected}` : "Choose a candidate";
+}
+
+onSnapshot(doc(db, "poll", "state"), snap => {
+  const prevRound = state && state.round;
+  state = snap.exists() ? snap.data() : null;
+  if (state && state.round !== prevRound) { selected = null; say("voteMsg", ""); }
+  render();
+}, () => { $("status").innerHTML = "<p class='msg bad'>Lost connection. Refresh the page.</p>"; });
+
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Replace these with the UIDs from Firebase console → Authentication → Users
+    function isHost()  { return request.auth != null && request.auth.uid == 'YtlxU5mEgAWT5lCcNXCBb52oWsd2'; }
+    function isAdmin() { return request.auth != null && request.auth.uid == '5cBYhN7thdR0llrikPWGFdtYQ2X2'; }
+    function st()      { return get(/databases/$(database)/documents/poll/state).data; }
+
+    // Current position, candidates, stage and winner. Everyone can read; only the host can change it.
+    match /poll/state {
+      allow read: if true;
+      allow write: if isHost();
+    }
+
+    // Voting codes. A phone can check one code it already knows, but nobody except the host can list them.
+    match /codes/{code} {
+      allow get: if true;
+      allow list, write: if isHost();
+    }
+
+    // In-person votes. One per code per position (the document ID is round_code, and votes can never be changed).
+    match /votes/{voteId} {
+      allow read: if isHost();
+      allow create: if st().stage == 'open'
+        && request.resource.data.keys().hasOnly(['code', 'round', 'candidate', 'at'])
+        && request.resource.data.round == st().round
+        && voteId == string(st().round) + '_' + request.resource.data.code
+        && request.resource.data.candidate in st().candidates
+        && request.resource.data.at == request.time
+        && exists(/databases/$(database)/documents/codes/$(request.resource.data.code));
+      allow update, delete: if false;
+    }
+
+    // Proxy votes. Only the admin account can add (or undo) them, only while voting is open.
+    // Only the host can read them.
+    match /proxyVotes/{id} {
+      allow read: if isHost();
+      allow create: if isAdmin() && st().stage == 'open'
+        && request.resource.data.keys().hasOnly(['round', 'candidate', 'at'])
+        && request.resource.data.round == st().round
+        && request.resource.data.candidate in st().candidates
+        && request.resource.data.at == request.time;
+      allow delete: if isAdmin() && st().stage == 'open' && resource.data.round == st().round;
+      allow update: if false;
+    }
+  }
+}

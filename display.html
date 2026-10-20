@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AGM big screen</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  body { background: #51247a; color: #fff; min-height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; overflow: hidden; }
+  .wrap { padding: 4vh 5vw; width: 100%; }
+  .position { font-size: 4vh; opacity: .8; margin: 0 0 2vh; }
+  .headline { font-size: 9vh; font-weight: 700; line-height: 1.1; margin: 0 0 4vh; }
+  .winner { font-size: 14vh; font-weight: 700; line-height: 1.05; margin: 2vh 0; }
+  .sub { font-size: 3.2vh; opacity: .85; margin: 0; }
+  .split { display: flex; gap: 6vw; align-items: center; justify-content: center; flex-wrap: wrap; }
+  #qr { background: #fff; padding: 2vh; border-radius: 1vh; display: inline-block; }
+  #qr img, #qr canvas { width: 36vh !important; height: 36vh !important; display: block; }
+  .cands { font-size: 4.5vh; line-height: 1.5; text-align: left; margin: 0; padding: 0; list-style: none; }
+  .url { font-size: 2.4vh; margin-top: 1.5vh; opacity: .85; word-break: break-all; }
+  #fs { position: fixed; bottom: 1rem; right: 1rem; background: transparent; color: #fff; border-color: #fff; opacity: .6; }
+  @media (prefers-reduced-motion: no-preference) {
+    .winner { animation: rise .8s ease-out both; }
+    @keyframes rise { from { opacity: 0; transform: scale(.9); } to { opacity: 1; transform: none; } }
+  }
+</style>
+</head>
+<body>
+<div class="wrap" id="screen"><p class="headline">AGM</p></div>
+<div id="qrHolder" hidden><div id="qr"></div></div>
+<button id="fs">Full screen</button>
+
+<script type="module">
+import { db } from "./firebase-config.js";
+import { doc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const voteUrl = new URL("./", location.href).href;
+new QRCode(document.getElementById("qr"), { text: voteUrl, width: 512, height: 512 });
+const qrEl = document.getElementById("qr");
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+document.getElementById("fs").onclick = () => {
+  document.documentElement.requestFullscreen?.();
+  document.getElementById("fs").hidden = true;
+};
+document.addEventListener("fullscreenchange", () => { document.getElementById("fs").hidden = !!document.fullscreenElement; });
+
+function qrBlock(candidates, heading) {
+  const list = candidates.length ? `<ul class="cands">${candidates.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : "";
+  return `<p class="headline">${heading}</p>
+    <div class="split"><div><div id="qrSlot"></div><p class="url">${esc(voteUrl)}</p></div>${list}</div>`;
+}
+
+onSnapshot(doc(db, "poll", "state"), snap => {
+  const s = snap.data();
+  const screen = document.getElementById("screen");
+  if (!s) { screen.innerHTML = `<p class="headline">AGM</p>`; return; }
+  const pos = s.title ? `<p class="position">${esc(s.title)}</p>` : "";
+
+  if (s.stage === "setup") {
+    screen.innerHTML = pos + qrBlock(s.candidates, "Voting opens soon");
+  } else if (s.stage === "open") {
+    screen.innerHTML = pos + qrBlock(s.candidates, "Voting is open");
+  } else if (s.stage === "closed") {
+    screen.innerHTML = pos + `<p class="headline">Voting has closed</p><p class="sub">The result will be announced shortly.</p>`;
+  } else if (s.stage === "revealed") {
+    const w = s.winner || [];
+    screen.innerHTML = pos + (w.length > 1
+      ? `<p class="sub">It’s a tie between</p><p class="winner">${w.map(esc).join(" &amp; ")}</p>`
+      : `<p class="sub">Elected</p><p class="winner">${esc(w[0] || "No votes cast")}</p>`);
+  }
+  const slot = document.getElementById("qrSlot");
+  if (slot) slot.appendChild(qrEl);
+});
+</script>
+</body>
+</html>
