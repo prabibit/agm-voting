@@ -32,7 +32,7 @@ import { doc, getDoc, setDoc, onSnapshot, serverTimestamp }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const $ = id => document.getElementById(id);
-let code = null, state = null, selected = null, voted = new Set(), sending = false;
+let code = null, state = null, selected = [], voted = new Set(), sending = false;
 
 const clean  = s => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
 const pretty = c => c;
@@ -70,14 +70,14 @@ $("changeCode").onclick = e => {
 };
 
 $("voteBtn").onclick = async () => {
-  if (!selected || sending) return;
+  if (!selected.length || sending) return;
   sending = true; $("voteBtn").disabled = true;
   say("voteMsg", "Sending your vote…");
   const round = state.round;
   try {
     await setDoc(doc(db, "votes", `${round}_${code}`),
-      { code, round, candidate: selected, at: serverTimestamp() });
-    voted.add(round); save(); selected = null; say("voteMsg", "");
+      { code, round, candidates: selected, at: serverTimestamp() });
+    voted.add(round); save(); selected = []; say("voteMsg", "");
   } catch (e) {
     if (state.stage !== "open") say("voteMsg", "Voting closed before your vote was received.", "bad");
     else if (e.code === "permission-denied") say("voteMsg", "This code has already been used for this vote.", "bad");
@@ -105,25 +105,34 @@ function render() {
   if (state.stage === "revealed") { $("status").innerHTML = "<p>The result is on the screen. Keep this page open for the next vote.</p>"; return; }
 
   // Voting open
-  $("status").innerHTML = "<p>Choose one candidate, then submit your vote.</p>";
-  if (!state.candidates.includes(selected)) selected = null;
+  const seats = state.seats || 1;
+  selected = selected.filter(n => state.candidates.includes(n)).slice(0, seats);
+  $("status").innerHTML = seats > 1
+    ? `<p>Choose up to <strong>${seats}</strong> different candidates (${selected.length} of ${seats} chosen), then submit.</p>`
+    : "<p>Choose one candidate, then submit your vote.</p>";
   for (const name of state.candidates) {
     const b = document.createElement("button");
     b.className = "choice";
     b.textContent = name;
-    b.setAttribute("aria-pressed", String(name === selected));
-    b.onclick = () => { selected = name; render(); };
+    b.setAttribute("aria-pressed", String(selected.includes(name)));
+    b.onclick = () => {
+      if (selected.includes(name)) selected = selected.filter(n => n !== name);
+      else if (seats === 1) selected = [name];
+      else if (selected.length < seats) selected = [...selected, name];
+      else { say("voteMsg", `You can choose up to ${seats}. Tap a chosen name to remove it first.`, "bad"); return; }
+      say("voteMsg", ""); render();
+    };
     $("choices").appendChild(b);
   }
   $("voteBtn").hidden = false;
-  $("voteBtn").disabled = !selected || sending;
-  $("voteBtn").textContent = selected ? `Submit vote for ${selected}` : "Choose a candidate";
+  $("voteBtn").disabled = !selected.length || sending;
+  $("voteBtn").textContent = selected.length ? `Submit vote for ${selected.join(" and ")}` : "Choose a candidate";
 }
 
 onSnapshot(doc(db, "poll", "state"), snap => {
   const prevRound = state && state.round;
   state = snap.exists() ? snap.data() : null;
-  if (state && state.round !== prevRound) { selected = null; say("voteMsg", ""); }
+  if (state && state.round !== prevRound) { selected = []; say("voteMsg", ""); }
   render();
 }, () => { $("status").innerHTML = "<p class='msg bad'>Lost connection. Refresh the page.</p>"; });
 
