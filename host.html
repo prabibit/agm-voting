@@ -86,7 +86,7 @@ let state = null, votes = [], proxies = [], unsubs = [], watchedRound = null, st
 $("loginBtn").onclick = async () => {
   say("loginMsg", "Signing in…");
   try { await signInWithEmailAndPassword(auth, $("email").value.trim(), $("password").value); say("loginMsg", ""); }
-  catch (e) { say("loginMsg", "Email or password is wrong.", "bad"); }
+     catch (e) { say("loginMsg", "Sign-in failed: " + e.code, "bad"); }
 };
 $("password").addEventListener("keydown", e => { if (e.key === "Enter") $("loginBtn").click(); });
 $("logoutBtn").onclick = () => signOut(auth);
