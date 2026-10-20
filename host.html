@@ -35,8 +35,12 @@
     <div class="panel">
       <h2 style="margin-top:0">Position</h2>
       <div class="row">
-        <input id="titleInput" placeholder="e.g. President">
+        <input id="titleInput" placeholder="e.g. General committee">
         <button id="titleBtn" class="secondary">Save</button>
+      </div>
+      <div class="row" style="margin-top:.6rem">
+        <label for="seatsInput">Votes per code (people being elected):</label>
+        <input id="seatsInput" type="number" min="1" max="10" value="2" style="max-width:5rem;min-width:0">
       </div>
 
       <h2>Candidates</h2>
@@ -99,7 +103,7 @@ onAuthStateChanged(auth, async user => {
   try {
     const snap = await getDoc(stateRef);
     if (!snap.exists()) {
-      await setDoc(stateRef, { title: "", candidates: [], stage: "setup", round: 1, winner: [] });
+      await setDoc(stateRef, { title: "", candidates: [], stage: "setup", round: 1, seats: 2, winner: [] });
     }
   } catch (e) { say("stageMsg", "This account can’t control the vote. Check the host UID in the Firebase rules.", "bad"); }
   stateUnsub = onSnapshot(stateRef, snap => { state = snap.data(); watchRound(); render(); });
@@ -119,7 +123,7 @@ function watchRound() {
 function tally() {
   const t = {};
   for (const c of state.candidates) t[c] = { inPerson: 0, proxy: 0 };
-  for (const v of votes)   if (t[v.candidate]) t[v.candidate].inPerson++;
+  for (const v of votes)   for (const c of (v.candidates || [v.candidate])) if (t[c]) t[c].inPerson++;
   for (const p of proxies) if (t[p.candidate]) t[p.candidate].proxy++;
   return t;
 }
@@ -130,7 +134,9 @@ async function run(fn) {
   catch (e) { say("stageMsg", "That didn’t save. Check the internet connection and try again.", "bad"); }
 }
 
-$("titleBtn").onclick = () => run(() => updateDoc(stateRef, { title: $("titleInput").value.trim() }));
+const seatsValue = () => Math.max(1, Math.min(10, parseInt($("seatsInput").value, 10) || 1));
+$("titleBtn").onclick = () => run(() => updateDoc(stateRef, { title: $("titleInput").value.trim(), seats: seatsValue() }));
+$("seatsInput").onchange = () => { if (state.stage === "setup") run(() => updateDoc(stateRef, { seats: seatsValue() })); };
 
 $("candBtn").onclick = () => {
   const name = $("candInput").value.trim();
@@ -142,23 +148,27 @@ $("candInput").addEventListener("keydown", e => { if (e.key === "Enter") $("cand
 
 $("openBtn").onclick = () => {
   if (state.candidates.length < 1) return say("stageMsg", "Add at least one candidate before opening voting.", "bad");
-  run(() => updateDoc(stateRef, { stage: "open" }));
+  run(() => updateDoc(stateRef, state.stage === "setup" ? { stage: "open", seats: seatsValue() } : { stage: "open" }));
 };
 $("closeBtn").onclick = () => {
   if (confirm("Close voting? Phones will stop accepting votes.")) run(() => updateDoc(stateRef, { stage: "closed" }));
 };
 $("revealBtn").onclick = () => {
   const t = tally();
-  const totals = Object.entries(t).map(([name, v]) => [name, v.inPerson + v.proxy]);
-  const top = Math.max(0, ...totals.map(x => x[1]));
-  if (top === 0 && !confirm("No votes have been cast. Announce anyway?")) return;
-  const winner = totals.filter(x => x[1] === top).map(x => x[0]);
+  const seats = state.seats || 1;
+  const totals = Object.entries(t).map(([name, v]) => [name, v.inPerson + v.proxy]).sort((a, b) => b[1] - a[1]);
+  if (!totals.length) return say("stageMsg", "There are no candidates.", "bad");
+  if (totals[0][1] === 0 && !confirm("No votes have been cast. Announce anyway?")) return;
+  // Everyone at or above the last winning place. More names than places means a tie for the last place.
+  const cutoff = totals[Math.min(seats, totals.length) - 1][1];
+  const winner = totals.filter(x => x[1] >= cutoff).map(x => x[0]);
+  if (winner.length > seats) alert(`Tie: ${winner.length} candidates share the top ${seats} places. The big screen will show it as a tie.`);
   run(() => updateDoc(stateRef, { stage: "revealed", winner }));
 };
 $("nextPosBtn").onclick = () => {
   if (!confirm("Start the next position? This clears the candidate list. Codes can be used again for the new position.")) return;
   $("titleInput").value = "";
-  run(() => updateDoc(stateRef, { stage: "setup", round: state.round + 1, title: "", candidates: [], winner: [] }));
+  run(() => updateDoc(stateRef, { stage: "setup", round: state.round + 1, title: "", candidates: [], winner: [], seats: state.seats || 2 }));
 };
 $("displayBtn").onclick = () => window.open("display.html", "agmDisplay", "width=1280,height=720");
 $("tallyBtn").onclick = () => {
@@ -192,6 +202,8 @@ function render() {
   $("roundNo").textContent = state.round;
   $("inPersonCount").textContent = votes.length;
   if (document.activeElement !== $("titleInput")) $("titleInput").value = state.title || "";
+  if (document.activeElement !== $("seatsInput")) $("seatsInput").value = state.seats || 2;
+  $("seatsInput").disabled = s !== "setup";
 
   $("openBtn").disabled    = !(s === "setup" || s === "closed");
   $("openBtn").textContent = s === "closed" ? "Reopen voting" : "Open voting";
